@@ -13,7 +13,7 @@ DB_PORT = 5432
 @st.cache_resource
 def connect():
     return psycopg2.connect(
-        host=DB_HOST,
+        host=DB_HOST,git 
         database=DB_NAME,
         user=DB_USER,
         password=DB_PASS,
