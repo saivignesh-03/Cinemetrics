@@ -41,7 +41,7 @@ except Exception as e:
     st.stop()
 
 # 🧭 Tabs for navigation
-tab1, tab2 = st.tabs(["📋 Table Viewer - jai balayyaaaa", "🧠 Custom SQL Query"])
+tab1, tab2 = st.tabs(["📋 Table Viewer ", "🧠 Custom SQL Query"])
 
 # 📋 Table Viewer tab
 with tab1:
