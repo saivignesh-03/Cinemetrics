@@ -13,7 +13,7 @@ DB_PORT = 5432
 @st.cache_resource
 def connect():
     return psycopg2.connect(
-        host=DB_HOST,git 
+        host=DB_HOST,
         database=DB_NAME,
         user=DB_USER,
         password=DB_PASS,
@@ -41,7 +41,7 @@ except Exception as e:
     st.stop()
 
 # 🧭 Tabs for navigation
-tab1, tab2 = st.tabs(["📋 Table Viewer ", "🧠 Custom SQL Query"])
+tab1, tab2 = st.tabs(["📋 Table Viewer", "🧠 Custom SQL Query"])
 
 # 📋 Table Viewer tab
 with tab1:
