@@ -1,105 +1,315 @@
 import streamlit as st
-import psycopg2
 import pandas as pd
+import psycopg2
+import plotly.express as px
 
-# 🎯 PostgreSQL connection details (Render)
-DB_HOST = "dpg-d05ff0ili9vc738ohfbg-a.oregon-postgres.render.com"
-DB_NAME = "cinimetrics"
-DB_USER = "cinimetrics_user"
-DB_PASS = "64c5SUsHLV9duIqELB3mSW4fl5pZBuDy"
-DB_PORT = 5432
+# --------------------
+# Database Connection Setup
+# --------------------
 
-# 🧠 Cache DB connection
-@st.cache_resource
-def connect():
+def get_connection():
+    """Return a new Postgres connection (Render)"""
     return psycopg2.connect(
-        host=DB_HOST,
-        database=DB_NAME,
-        user=DB_USER,
-        password=DB_PASS,
-        port=DB_PORT
+        host="dpg-d05ff0ili9vc738ohfbg-a.oregon-postgres.render.com",
+        database="cinimetrics",
+        user="cinimetrics_user",
+        password="64c5SUsHLV9duIqELB3mSW4fl5pZBuDy",
+        port="5432"
     )
 
-# 🌐 Page config
-st.set_page_config(page_title="Cinimetrics Database Explorer", layout="wide")
+# --------------------
+# Generic query helpers (results are cached)
+# --------------------
+
+@st.cache_data(show_spinner="Running SQL …")
+def fetch_query(sql: str, params: tuple | None = None) -> pd.DataFrame:
+    """Run a read‑only query and cache the resulting DataFrame."""
+    with get_connection() as conn:
+        df = pd.read_sql_query(sql, conn, params=params)
+    return df.copy()
+
+@st.cache_data(show_spinner="Running custom SQL …")
+def fetch_custom_query(sql: str) -> pd.DataFrame:
+    """User‑supplied query (keyed by the exact SQL string)."""
+    with get_connection() as conn:
+        df = pd.read_sql_query(sql, conn)
+    return df.copy()
+
+# --------------------
+# UI helper
+# --------------------
+
+def display_dataframe(df: pd.DataFrame, key_prefix: str = "table") -> None:
+    """Show df with simple column filter without re‑querying DB."""
+    if df.empty:
+        st.info("No rows returned.")
+        return
+
+    filter_col = st.selectbox(
+        "Select column to filter", df.columns, key=f"{key_prefix}_filtercol"
+    )
+    filter_val = st.text_input(
+        f"Search in {filter_col}", key=f"{key_prefix}_filterval"
+    )
+    if filter_val:
+        df = df[df[filter_col].astype(str).str.contains(filter_val, case=False)]
+
+    st.data_editor(df, use_container_width=True, hide_index=True, num_rows="dynamic")
+
+# --------------------
+# Streamlit App
+# --------------------
+
+def main():
+    st.set_page_config(page_title="CineMetrics Dashboard", layout="wide")
+    st.title("🎬 CineMetrics: Theatre Chain Management Dashboard")
+
+    # --------------------
+    # Homepage Metrics (cached queries)
+    # --------------------
+    st.header("📊 Quick Insights")
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        movies_cnt = fetch_query("SELECT COUNT(*) FROM Movies")
+        st.metric("Total Movies", movies_cnt.iat[0, 0])
+
+    with col2:
+        cust_cnt = fetch_query("SELECT COUNT(*) FROM Customer_Contacts")
+        st.metric("Total Customers", cust_cnt.iat[0, 0])
+
+    with col3:
+        txn_cnt = fetch_query("SELECT COUNT(*) FROM Transactions")
+        st.metric("Total Transactions", txn_cnt.iat[0, 0])
+
+    st.subheader("Revenue Trend")
+    rev_df = fetch_query(
+        """
+        SELECT booking_date::date AS day, SUM(total_amount) AS revenue
+        FROM Transactions
+        GROUP BY day
+        ORDER BY day
+        """
+    )
+    st.plotly_chart(px.line(rev_df, x="day", y="revenue"), use_container_width=True)
+
+    # --------------------
+    # Tabs
+    # --------------------
+    tabs = st.tabs([
+        "📽 Movies", "🏛️ Theatres", "👥 Customers", "👷 Staff",
+        "🍟 Food Sales", "💳 Transactions", "🎁 Promotions", "🛠 Query Tool"
+    ])
+
+    # — Movies
+    with tabs[0]:
+        st.header("Movies and Screening Schedules")
+        movies_df = fetch_query(
+            """
+            SELECT m.name AS movie_name, m.rating, m.production_house,
+                   s.show_date, s.show_time, s.available_seats,
+                   sr.screen_no, t.name AS theatre_name, t.city
+            FROM Screening_Schedule s
+            JOIN Movies m  ON s.movie_id   = m.movie_id
+            JOIN Screen_Registry sr ON s.screen_id  = sr.screen_id
+            JOIN Theatres t ON sr.theatre_id = t.theatre_id
+            ORDER BY s.show_date, s.show_time
+            """
+        )
+        display_dataframe(movies_df, key_prefix="movies")
+
+    # — Theatres
+    with tabs[1]:
+        st.header("Theatres and Screens")
+        th_df = fetch_query(
+            """
+            SELECT t.name AS theatre_name, t.address, t.city, t.state,
+                   sd.screen_type, sd.capacity, sr.screen_no
+            FROM Theatres t
+            JOIN Screen_Registry sr ON t.theatre_id = sr.theatre_id
+            JOIN Screen_Details sd ON sr.screen_id   = sd.screen_id
+            ORDER BY t.name, sr.screen_no
+            """
+        )
+        display_dataframe(th_df, key_prefix="theatres")
+
+    # — Customers
+    with tabs[2]:
+        st.header("Customer Details")
+        cust_df = fetch_query(
+            "SELECT customer_name, email_id, contact_no FROM Customer_Contacts ORDER BY customer_name"
+        )
+        display_dataframe(cust_df, key_prefix="customers")
+
+    # — Staff
+    with tabs[3]:
+        st.header("Staff and Shifts")
+        staff_df = fetch_query(
+            """
+            SELECT ts.staff_id, ts.email, ts.role, ts.salary,
+                   t.name AS theatre_name,
+                   ds.shift_date, ds.shift_start_time, ds.shift_end_time
+            FROM Theatre_Staff_ID_Map ts
+            JOIN Theatres t ON ts.theatre_id = t.theatre_id
+            LEFT JOIN Daily_Shifts ds ON ts.staff_id = ds.staff_id
+            ORDER BY ts.staff_id, ds.shift_date
+            """
+        )
+        display_dataframe(staff_df, key_prefix="staff")
+
+    # — Food Sales
+    with tabs[4]:
+        st.header("Food Sales")
+        food_df = fetch_query(
+            """
+            SELECT fd.food_name, fd.price, tr.transaction_id,
+                   tr.booking_date, tr.total_amount
+            FROM Food_Details fd
+            JOIN Transactions tr ON fd.transaction_id = tr.transaction_id
+            ORDER BY tr.booking_date
+            """
+        )
+        display_dataframe(food_df, key_prefix="food")
+
+    # — Transactions
+    with tabs[5]:
+        st.header("Transactions")
+        txn_df = fetch_query(
+            """
+            SELECT tr.transaction_id, cc.customer_name,
+                   tr.seats_booked, tr.ticket_price,
+                   tr.food_amount, tr.total_amount, tr.booking_date
+            FROM Transactions tr
+            JOIN Customer_ID_Map cim ON tr.customer_id = cim.customer_id
+            JOIN Customer_Contacts cc ON cim.email_id   = cc.email_id
+            ORDER BY tr.booking_date DESC
+            """
+        )
+        display_dataframe(txn_df, key_prefix="transactions")
+
+    # — Promotions
+    with tabs[6]:
+        st.header("Promotions")
+        promo_df = fetch_query(
+            """
+            SELECT p.promo_code, p.discount_applied,
+                   tr.transaction_id, tr.booking_date,
+                   cc.customer_name
+            FROM Promotions p
+            JOIN Transactions tr ON p.transaction_id = tr.transaction_id
+            JOIN Customer_ID_Map cim ON tr.customer_id = cim.customer_id
+            JOIN Customer_Contacts cc ON cim.email_id   = cc.email_id
+            ORDER BY tr.booking_date
+            """
+        )
+        display_dataframe(promo_df, key_prefix="promotions")
+
+    # --------------------
+    # Query Tool (uses session‑state cache)
+    # --------------------
+    # --------------------
+# Query Tool (replace this whole tab block)
+# --------------------
+    with tabs[7]:
+        st.header("🛠 Custom Query Tool")
+
+        # ------------ 1. show DB structure ------------
+        st.subheader("Database Structure")
+        st.markdown(
+    """
+<span style="color:#1f77b4"><b>Movies</b></span>
+&nbsp;(movie_id PK, name, genre, rating, production_house)  
+&nbsp;← <span style="color:#2ca02c"><b>Screening_Schedule</b></span>
+&nbsp;(schedule_id PK, screen_id FK, movie_id FK, show_date, show_time, available_seats)  
+&nbsp;← <span style="color:#2ca02c"><b>Screen_Registry</b></span>
+&nbsp;(screen_id PK, theatre_id FK, screen_no)  
+&nbsp;&nbsp;&nbsp;&nbsp;← <span style="color:#d62728"><b>Theatres</b></span>
+&nbsp;(theatre_id PK, name, address, city, state)  
+&nbsp;← <span style="color:#2ca02c"><b>Screen_Details</b></span>
+&nbsp;(screen_id PK = FK, screen_type, capacity)  
+&nbsp;← <span style="color:#2ca02c"><b>Transactions</b></span>
+&nbsp;(transaction_id PK, customer_id FK, schedule_id FK, seats_booked, ticket_price, food_amount, total_amount, booking_date)  
+&nbsp;&nbsp;&nbsp;&nbsp;├─ <span style="color:#9467bd"><b>Food_Details</b></span>
+&nbsp;(food_id PK, transaction_id FK, food_name, price)  
+&nbsp;&nbsp;&nbsp;&nbsp;└─ <span style="color:#9467bd"><b>Promotions</b></span>
+&nbsp;(promo_id PK, transaction_id FK, promo_code, discount_applied)  
+
+<br>
+
+<span style="color:#1f77b4"><b>Customer_Contacts</b></span>
+&nbsp;(email_id PK, customer_name, contact_no)  
+&nbsp;← <span style="color:#2ca02c"><b>Customer_ID_Map</b></span>
+&nbsp;(customer_id PK, email_id FK)  
+&nbsp;← <span style="color:#2ca02c"><b>Transactions …</b></span> (see above)  
+
+<br>
+
+<span style="color:#1f77b4"><b>Theatre_Staff_ID_Map</b></span>
+&nbsp;(staff_id PK, theatre_id FK, email FK, role, salary)  
+&nbsp;↔ <span style="color:#8c564b"><b>Staff_Contacts</b></span>
+&nbsp;(email PK, first_name, last_name, phone)  
+&nbsp;← <span style="color:#8c564b"><b>Daily_Shifts</b></span>
+&nbsp;(shift_id PK, staff_id FK, shift_date, shift_start_time, shift_end_time)
+    """,
+    unsafe_allow_html=True,
+)
 
 
-st.title("🏥 Cinimetrics Database Explorer")
-st.caption("Connected to Render PostgreSQL")
+        # ------------ 2. run SQL & cache result ------------
+        query = st.text_area("Enter your SQL query here", key="sql_text")
+        run_btn = st.button("Run Query", key="run_query_btn")
 
-# 🔌 Connect to DB
-conn = connect()
-
-# 📂 Get list of tables
-try:
-    cur = conn.cursor()
-    cur.execute("SELECT table_name FROM information_schema.tables WHERE table_schema='public'")
-    tables = [row[0] for row in cur.fetchall()]
-    cur.close()
-except Exception as e:
-    st.error(f"Database connection failed: {e}")
-    st.stop()
-
-# 🧭 Tabs for navigation
-tab1, tab2 = st.tabs(["📋 Table Viewer", "🧠 Custom SQL Query"])
-
-# 📋 Table Viewer tab
-with tab1:
-    st.subheader("🗃️ Browse Tables")
-    selected_table = st.selectbox("Choose a table to preview:", tables)
-
-    if selected_table:
-        try:
-            df = pd.read_sql_query(f'SELECT * FROM "{selected_table}" LIMIT 100', conn)
-            st.dataframe(df, use_container_width=True)
-        except Exception as e:
-            st.error(f"Failed to load table: {e}")
-
-# 🧠 Custom SQL Query tab
-with tab2:
-    st.subheader("💬 Write a SQL SELECT query")
-    default_query = f'SELECT * FROM "{tables[0]}" LIMIT 10' if tables else ""
-    user_query = st.text_area("Write your SQL query below:", default_query, height=150)
-
-    # Track query result in session state to preserve it across interactions
-    if "query_df" not in st.session_state:
-        st.session_state.query_df = pd.DataFrame()
-
-    if st.button("▶️ Run Query"):
-        lowered = user_query.strip().lower()
-        if "select" not in lowered:
-            st.error("❌ Only SELECT queries are allowed.")
-        else:
+        if run_btn and query.strip():
             try:
-                st.session_state.query_df = pd.read_sql_query(user_query, conn)
-                st.success("✅ Query executed successfully!")
+                @st.cache_data(show_spinner=True)
+                def _run_sql(q):
+                    with get_connection() as conn:
+                        df_ = pd.read_sql_query(q, conn)
+                    return df_.copy()           # cache only data
+
+                st.session_state["query_df"] = _run_sql(query)
+                st.success("Query executed and cached!")
+
             except Exception as e:
-                st.session_state.query_df = pd.DataFrame()
-                st.error(f"⚠️ Query failed: {e}")
+                st.error(f"❌ {e}")
 
-    # Show results if they exist
-    if not st.session_state.query_df.empty:
-        st.dataframe(st.session_state.query_df, use_container_width=True)
+        # guard: make sure we have a cached df
+        if "query_df" in st.session_state:
+            df = st.session_state["query_df"]
 
-        # 💾 Download CSV
-        csv = st.session_state.query_df.to_csv(index=False).encode("utf-8")
-        st.download_button("💾 Download Results as CSV", csv, "query_results.csv", "text/csv")
+            # ------------ 3. interactive table ------------
+            st.subheader("Result")
+            display_dataframe(df)
 
-        # 📊 Visualization
-        st.markdown("---")
-        st.subheader("📈 Visualize Query Results")
+            # ------------ 4. chart builder ------------
+            if not df.empty:
+                st.subheader("Plot Result- Hello")
 
-        numeric_cols = st.session_state.query_df.select_dtypes(include=["number"]).columns.tolist()
-        all_cols = st.session_state.query_df.columns.tolist()
+                # Use a form so choices don’t trigger full rerun until submitted
+                with st.form(key="plot_form"):
+                    cols = df.columns.tolist()
+                    x_axis = st.selectbox("X-axis column", cols, key="plot_x")
+                    y_axis = st.selectbox(
+                        "Y-axis column",
+                        [c for c in cols if c != x_axis],
+                        key="plot_y"
+                    )
+                    chart_type = st.radio("Chart type", ("Bar", "Line"), key="plot_type")
+                    submitted = st.form_submit_button("Create chart")
 
-        if numeric_cols:
-            x_axis = st.selectbox("🧭 Select X-axis", options=all_cols, index=0, key="x_axis")
-            y_axis = st.selectbox("📊 Select Y-axis (numeric only)", options=numeric_cols, index=0, key="y_axis")
-            chart_type = st.radio("📈 Chart Type", ["Bar Chart", "Line Chart"], horizontal=True, key="chart_type")
+                if submitted:
+                    if chart_type == "Bar":
+                        fig = px.bar(df, x=x_axis, y=y_axis)
+                    else:
+                        fig = px.line(df, x=x_axis, y=y_axis)
 
-            if chart_type == "Bar Chart":
-                st.bar_chart(st.session_state.query_df.set_index(x_axis)[y_axis])
-            elif chart_type == "Line Chart":
-                st.line_chart(st.session_state.query_df.set_index(x_axis)[y_axis])
-        else:
-            st.info("No numeric columns available for visualization.")
+                    st.plotly_chart(fig, use_container_width=True)
+
+
+
+# --------------------
+# Run the App
+# --------------------
+
+if __name__ == "__main__":
+    main()
