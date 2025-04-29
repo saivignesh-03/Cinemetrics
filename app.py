@@ -98,7 +98,7 @@ def main():
     # --------------------
     tabs = st.tabs([
         "📽 Movies", "🏛️ Theatres", "👥 Customers", "👷 Staff",
-        "🍟 Food Sales", "💳 Transactions", "🎁 Promotions", "🛠 Query Tool"
+        "🍟 Food Sales", "💳 Transactions", "🎁 Promotions", "🛠 Query Tool", "🔐 Admin Console"
     ])
 
     # — Movies
@@ -204,17 +204,9 @@ def main():
         )
         display_dataframe(promo_df, key_prefix="promotions")
 
-    # --------------------
-    # Query Tool (uses session‑state cache)
-    # --------------------
-    # --------------------
-# Query Tool (replace this whole tab block)
-# --------------------
+    # — Query Tool
     with tabs[7]:
         st.header("🛠 Custom Query Tool")
-
-        # ------------ 1. show DB structure ------------
-        st.subheader("Database Structure")
         st.markdown(
     """
 <span style="color:#1f77b4"><b>Movies</b></span>
@@ -253,9 +245,6 @@ def main():
     """,
     unsafe_allow_html=True,
 )
-
-
-        # ------------ 2. run SQL & cache result ------------
         query = st.text_area("Enter your SQL query here", key="sql_text")
         run_btn = st.button("Run Query", key="run_query_btn")
 
@@ -265,7 +254,7 @@ def main():
                 def _run_sql(q):
                     with get_connection() as conn:
                         df_ = pd.read_sql_query(q, conn)
-                    return df_.copy()           # cache only data
+                    return df_.copy()
 
                 st.session_state["query_df"] = _run_sql(query)
                 st.success("Query executed and cached!")
@@ -273,19 +262,13 @@ def main():
             except Exception as e:
                 st.error(f"❌ {e}")
 
-        # guard: make sure we have a cached df
         if "query_df" in st.session_state:
             df = st.session_state["query_df"]
-
-            # ------------ 3. interactive table ------------
             st.subheader("Result")
             display_dataframe(df)
 
-            # ------------ 4. chart builder ------------
             if not df.empty:
-                st.subheader("Plot Result- Hello")
-
-                # Use a form so choices don’t trigger full rerun until submitted
+                st.subheader("Plot Result")
                 with st.form(key="plot_form"):
                     cols = df.columns.tolist()
                     x_axis = st.selectbox("X-axis column", cols, key="plot_x")
@@ -305,7 +288,80 @@ def main():
 
                     st.plotly_chart(fig, use_container_width=True)
 
+    # — Admin Console
+    with tabs[8]:
+        st.header("🔐 Admin Console (Insert | Update | Delete)")
+        st.markdown(
+    """
+<span style="color:#1f77b4"><b>Movies</b></span>
+&nbsp;(movie_id PK, name, genre, rating, production_house)  
+&nbsp;← <span style="color:#2ca02c"><b>Screening_Schedule</b></span>
+&nbsp;(schedule_id PK, screen_id FK, movie_id FK, show_date, show_time, available_seats)  
+&nbsp;← <span style="color:#2ca02c"><b>Screen_Registry</b></span>
+&nbsp;(screen_id PK, theatre_id FK, screen_no)  
+&nbsp;&nbsp;&nbsp;&nbsp;← <span style="color:#d62728"><b>Theatres</b></span>
+&nbsp;(theatre_id PK, name, address, city, state)  
+&nbsp;← <span style="color:#2ca02c"><b>Screen_Details</b></span>
+&nbsp;(screen_id PK = FK, screen_type, capacity)  
+&nbsp;← <span style="color:#2ca02c"><b>Transactions</b></span>
+&nbsp;(transaction_id PK, customer_id FK, schedule_id FK, seats_booked, ticket_price, food_amount, total_amount, booking_date)  
+&nbsp;&nbsp;&nbsp;&nbsp;├─ <span style="color:#9467bd"><b>Food_Details</b></span>
+&nbsp;(food_id PK, transaction_id FK, food_name, price)  
+&nbsp;&nbsp;&nbsp;&nbsp;└─ <span style="color:#9467bd"><b>Promotions</b></span>
+&nbsp;(promo_id PK, transaction_id FK, promo_code, discount_applied)  
 
+<br>
+
+<span style="color:#1f77b4"><b>Customer_Contacts</b></span>
+&nbsp;(email_id PK, customer_name, contact_no)  
+&nbsp;← <span style="color:#2ca02c"><b>Customer_ID_Map</b></span>
+&nbsp;(customer_id PK, email_id FK)  
+&nbsp;← <span style="color:#2ca02c"><b>Transactions …</b></span> (see above)  
+
+<br>
+
+<span style="color:#1f77b4"><b>Theatre_Staff_ID_Map</b></span>
+&nbsp;(staff_id PK, theatre_id FK, email FK, role, salary)  
+&nbsp;↔ <span style="color:#8c564b"><b>Staff_Contacts</b></span>
+&nbsp;(email PK, first_name, last_name, phone)  
+&nbsp;← <span style="color:#8c564b"><b>Daily_Shifts</b></span>
+&nbsp;(shift_id PK, staff_id FK, shift_date, shift_start_time, shift_end_time)
+    """,
+    unsafe_allow_html=True,
+)
+        st.markdown(
+                """
+**Allowed operations**
+
+* `INSERT INTO customer_contacts
+(email_id, customer_name, contact_no)
+VALUES
+('alice.wson@cie.com', 'Aice Wilon', '9-222-1234');`
+* `UPDATE customer_contacts
+SET contact_no = '9-222-1234'
+WHERE email_id = 'alice.wilson@cine.com';`
+* `DELETE FROM customer_contacts
+WHERE email_id = 'alice.wson@cie.com';`
+""")
+        st.warning("⚠️ Write operations affect the live database – proceed carefully.")
+
+        pwd_ok = st.text_input("Enter admin password", type="password") == "incredible"
+        if pwd_ok:
+            st.success("Authenticated!")
+
+            sql_write = st.text_area("SQL (INSERT / UPDATE / DELETE)", key="write_sql")
+            if st.button("Execute", key="exec_write") and sql_write.strip():
+                try:
+                    with get_connection() as conn, conn.cursor() as cur:
+                        cur.execute(sql_write)
+                        conn.commit()
+                    st.success("✅ Statement executed.")
+                    fetch_query.clear()
+                    fetch_custom_query.clear()
+                except Exception as e:
+                    st.error(f"❌ {e}")
+        else:
+            st.info("Enter the password to unlock admin actions.")
 
 # --------------------
 # Run the App
